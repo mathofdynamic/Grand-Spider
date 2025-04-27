@@ -1,0 +1,8 @@
+Flask
+python-dotenv
+requests
+beautifulsoup4
+openai
+urllib3<2.0 # Often needed for compatibility with older requests/system setups
+selenium>=4.0
+webdriver-manager>=3.5

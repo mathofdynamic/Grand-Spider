@@ -109,3 +109,226 @@ curl -X POST http://127.0.0.1:5000/extract-info \
      -H "api-key: your_super_secret_and_unguessable_api_key" \
      -d '{"url": "https://droplinked.com/"}'
 
+
+```
+
+# Self-Hosted Firecrawl Setup
+
+This project demonstrates how to use Firecrawl's self-hosted version for web scraping and crawling.
+
+## Prerequisites
+
+- [Docker](https://www.docker.com/products/docker-desktop/) installed on your system
+- [Python](https://www.python.org/downloads/) 3.8 or higher
+- Required Python packages: `requests`, `pandas`, `asyncio`
+
+## Setup
+
+1. **Install Dependencies**
+
+```bash
+pip install requests pandas asyncio
+```
+
+2. **Start Firecrawl Services**
+
+Run the batch script to start all required Docker containers:
+
+```bash
+start_firecrawl.bat
+```
+
+This will start three Docker containers:
+- `firecrawl` (main API service)
+- `playwright-service` (web browser automation service)
+- `redis` (queue and caching service)
+
+The Firecrawl API will be available at: http://localhost:3002
+
+3. **Test the API Connection**
+
+Run the test script to verify that the API is working:
+
+```bash
+python test_firecrawl_api.py
+```
+
+This will make a simple request to scrape example.com and display the results.
+
+## Usage
+
+### Web Crawling
+
+To crawl a website and map its structure:
+
+```bash
+python test_pages.py
+```
+
+This will:
+1. Submit a crawl job to the local Firecrawl API
+2. Wait for the job to complete
+3. Process the results
+4. Save the data to a CSV file
+
+### Customization
+
+You can modify `test_pages.py` to:
+- Change the target URL
+- Adjust the maximum number of pages to crawl
+- Change the output formats
+- Process the data differently
+
+## Troubleshooting
+
+- If you encounter connection errors, make sure the Docker containers are running
+- Check the Docker logs for any errors:
+  ```bash
+  docker logs firecrawl_firecrawl_1
+  ```
+- Ensure ports 3000, 3002, and 6379 are not being used by other applications
+
+## References
+
+- [Firecrawl GitHub Repository](https://github.com/mendableai/firecrawl)
+- [Firecrawl Documentation](https://docs.firecrawl.dev/)
+
+# Web Crawler API
+
+This API provides functionality to crawl websites and extract information from web pages. It supports both simple requests-based crawling and Selenium-based crawling for JavaScript-heavy sites.
+
+## Setup
+
+The API server is already running on `http://localhost:5000`.
+
+## API Status
+
+✅ **CONFIRMED WORKING**: The API is running and has been tested successfully.
+
+## Testing with Postman
+
+1. Open Postman
+2. Import the collection file `web_crawler_api.postman_collection.json` included in this repository
+3. Use the included requests to test the API
+
+### Quick Postman Setup
+
+1. Create a new request in Postman
+2. Set the request URL to `http://localhost:5000/api/health` and method to `GET`
+3. Send the request to verify the API is running
+4. Create another request with URL `http://localhost:5000/api/crawl` and method `POST`
+5. Add headers:
+   - Key: `api-key`, Value: `this_is_very_stupid_key_for_this_api`
+   - Key: `Content-Type`, Value: `application/json`
+6. Add body (raw JSON):
+   ```json
+   {
+     "url": "https://example.com",
+     "max_pages": 10,
+     "use_selenium": true
+   }
+   ```
+7. Send the request to start a crawl job
+8. Copy the `job_id` from the response
+9. Create a GET request to `http://localhost:5000/api/crawl/{job_id}` (replace `{job_id}` with the actual ID)
+10. Add the `api-key` header and send the request to check the job status
+
+## API Endpoints
+
+### Health Check
+
+Check if the API is running.
+
+- **URL**: `/api/health`
+- **Method**: `GET`
+- **Authentication**: Not required
+- **Response Example**:
+  ```json
+  {
+    "status": "ok",
+    "message": "Web Crawler API is running"
+  }
+  ```
+
+### Start a Crawl Job
+
+Start a new web crawling job.
+
+- **URL**: `/api/crawl`
+- **Method**: `POST`
+- **Headers**: 
+  - `api-key`: `this_is_very_stupid_key_for_this_api`
+  - `Content-Type`: `application/json`
+- **Request Body**:
+  ```json
+  {
+    "url": "https://example.com",
+    "max_pages": 10,
+    "use_selenium": true
+  }
+  ```
+- **Response Example**:
+  ```json
+  {
+    "job_id": "1234-5678-90ab-cdef",
+    "status": "running",
+    "message": "Crawl job started successfully"
+  }
+  ```
+
+### Get Crawl Job Status
+
+Check the status of a crawl job and get results if complete.
+
+- **URL**: `/api/crawl/{job_id}`
+- **Method**: `GET`
+- **Headers**: 
+  - `api-key`: `this_is_very_stupid_key_for_this_api`
+- **Response Example (Completed)**:
+  ```json
+  {
+    "job_id": "c0ec11c2-c4dd-491b-9ab6-63485a81cbbf",
+    "url": "example.com",
+    "status": "completed",
+    "total_pages": 1,
+    "results": [
+      {
+        "url": "https://example.com",
+        "title": "Example Domain",
+        "description": "",
+        "status_code": 200
+      }
+    ]
+  }
+  ```
+
+### List All Crawl Jobs
+
+Get a list of all crawl jobs.
+
+- **URL**: `/api/crawl`
+- **Method**: `GET`
+- **Headers**: 
+  - `api-key`: `this_is_very_stupid_key_for_this_api`
+- **Response Example**:
+  ```json
+  {
+    "jobs": [
+      {
+        "job_id": "c0ec11c2-c4dd-491b-9ab6-63485a81cbbf",
+        "url": "example.com",
+        "status": "completed",
+        "created_at": 1745748433.2292097
+      }
+    ],
+    "total": 1
+  }
+  ```
+
+## Common Issues
+
+- Make sure to use the correct endpoints:
+  - To check job status: `/api/crawl/{job_id}` (not `/api/job_status/{job_id}`)
+- All endpoints except `/api/health` require the `api-key` header
+- Ensure URLs include the protocol (https:// or http://)
+
