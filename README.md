@@ -1,334 +1,156 @@
-# Contact Extractor API
+# Grand Spider
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-<!-- Add other badges here if you set them up (e.g., Build Status, Code Coverage) -->
-
-A Python Flask API designed to extract publicly available contact information (emails, phone numbers) and social media links from web pages using Selenium and BeautifulSoup.
+A Flask-based API that uses OpenAI's GPT models to analyze and describe web pages based on their HTML content.
 
 ## Overview
 
-This project provides a simple REST API endpoint that accepts a target URL. It then uses Selenium to control a headless Chrome browser, loading the specified page and allowing time for JavaScript rendering. The resulting HTML content is parsed using BeautifulSoup and regular expressions to find and extract relevant contact details. The findings are returned as a structured JSON response.
-
-This tool is useful for automating the initial phase of data gathering for outreach, market research, or lead generation, focusing only on publicly accessible information presented on the website itself.
+Grand Spider is a web service that fetches HTML content from a specified URL and uses OpenAI's language models to generate a concise description of what's on the page. This is useful for content categorization, web indexing, or quickly understanding a webpage's purpose without having to visit it.
 
 ## Features
 
-*   **Web Scraping:** Navigates to a given URL using Selenium WebDriver.
-*   **JavaScript Rendering:** Waits for a period (using explicit waits) to allow dynamic content loaded by JavaScript to appear before parsing.
-*   **HTML Parsing:** Uses BeautifulSoup to navigate the DOM structure.
-*   **Email Extraction:**
-    *   Finds `mailto:` links.
-    *   Uses regular expressions to find email patterns in the page text.
-*   **Phone Number Extraction:**
-    *   Finds `tel:` links.
-    *   Uses regular expressions to find common phone number patterns in the page text.
-*   **Social Media Link Extraction:** Identifies links pointing to major social media domains (Twitter, LinkedIn, Facebook, Instagram, etc.).
-*   **API Interface:** Simple Flask endpoint (`/extract-info`) accepting `POST` requests.
-*   **Authentication:** Basic API key authentication via request headers.
-*   **JSON Output:** Returns extracted data in a clean JSON format.
-*   **Error Handling:** Provides basic error responses for common issues (timeouts, invalid requests, server errors).
-*   **Debugging Support:** Saves the fetched HTML source to `debug_page_source.html` for inspection when troubleshooting.
+- **URL Analysis**: Submit any public URL and receive an AI-generated description of its content
+- **OpenAI Integration**: Leverages GPT-4.1-nano for intelligent content analysis
+- **API Authentication**: Secure endpoints with API key authentication
+- **Error Handling**: Comprehensive error handling for various failure scenarios
+- **Logging**: Detailed logging for monitoring and debugging
 
 ## Technology Stack
 
-*   **Python 3.x**
-*   **Flask:** Micro web framework for the API.
-*   **Selenium:** Browser automation tool for loading and rendering pages.
-*   **BeautifulSoup4 (bs4):** Library for parsing HTML and XML documents.
-*   **python-dotenv:** For managing environment variables (like API keys).
-*   **ChromeDriver:** WebDriver executable required by Selenium to control Chrome. (Ensure this is installed and matches your Chrome version, or use `webdriver-manager`).
-*   **Google Chrome / Chromium:** The browser being automated.
+- **Python 3.x**
+- **Flask**: Web framework for the API
+- **OpenAI API**: For AI-powered content analysis
+- **Requests**: For fetching web content
+- **python-dotenv**: For secure environment variable management
 
 ## Installation & Setup
 
-1.  **Clone the Repository:**
-    ```bash
-    git clone <your-repository-url>
-    cd contact_extractor
-    ```
+1. **Clone the Repository**:
+   ```bash
+   git clone https://github.com/yourusername/grand_spider.git
+   cd grand_spider
+   ```
 
-2.  **Create a Virtual Environment (Recommended):**
-    ```bash
-    python -m venv venv
-    # On Windows:
-    venv\Scripts\activate
-    # On macOS/Linux:
-    source venv/bin/activate
-    ```
+2. **Create a Virtual Environment**:
+   ```bash
+   python -m venv venv
+   # On Windows:
+   venv\Scripts\activate
+   # On macOS/Linux:
+   source venv/bin/activate
+   ```
 
-3.  **Install Dependencies:**
-    *   First, ensure you have Google Chrome (or Chromium) installed.
-    *   Create a `requirements.txt` file with the following content:
-        ```txt
-        Flask>=2.0
-        selenium>=4.0
-        beautifulsoup4>=4.9
-        python-dotenv>=0.19
-        # Optional, but helpful:
-        # webdriver-manager>=3.5
-        ```
-    *   Install the packages:
-        ```bash
-        pip install -r requirements.txt
-        ```
+3. **Install Dependencies**:
+   ```bash
+   pip install flask openai requests python-dotenv
+   ```
 
-4.  **Install ChromeDriver:**
-    *   Download the ChromeDriver executable that **matches your installed Google Chrome version** from the official site: [https://chromedriver.chromium.org/downloads](https://chromedriver.chromium.org/downloads)
-    *   Place the `chromedriver` executable either in your system's PATH or in the project directory.
-    *   *(Alternatively, if you installed `webdriver-manager`, you can modify the script to use `webdriver_manager.chrome.ChromeDriverManager().install()` instead of relying on a pre-downloaded driver - see comments in the Python code).*
-
-## Configuration
-
-1.  **Create Environment File:** Create a file named `.env` in the root project directory.
-2.  **Set API Key:** Add your desired secret API key to the `.env` file:
-    ```dotenv
-    MY_API_SECRET=your_super_secret_and_unguessable_api_key
-    ```
-    *   **Important:** Keep this key secure and do not commit the `.env` file to version control (ensure `.env` is listed in your `.gitignore` file).
+4. **Create Environment Variables**:
+   Create a `.env` file in the project root with:
+   ```
+   SERVICE_API_KEY=your_chosen_api_key_here
+   OPENAI_API_KEY=your_openai_api_key_here
+   ```
 
 ## API Usage
 
-### Endpoint: `/extract-info`
+### Analyze a Webpage
 
-*   **Method:** `POST`
-*   **Headers:**
-    *   `Content-Type: application/json`
-    *   `api-key: your_super_secret_and_unguessable_api_key` (Replace with the key from your `.env` file)
-*   **Body (Raw JSON):**
-    ```json
-    {
-      "url": "https://example.com"
-    }
-    ```
+**Endpoint**: `/analyze`
 
-### Example Request (using `curl`):
+**Method**: `POST`
 
-```bash
-curl -X POST http://127.0.0.1:5000/extract-info \
-     -H "Content-Type: application/json" \
-     -H "api-key: your_super_secret_and_unguessable_api_key" \
-     -d '{"url": "https://droplinked.com/"}'
+**Headers**:
+- `Content-Type: application/json`
+- `api-key: your_chosen_api_key_here`
 
-
+**Request Body**:
+```json
+{
+  "url": "https://example.com"
+}
 ```
 
-# Self-Hosted Firecrawl Setup
-
-This project demonstrates how to use Firecrawl's self-hosted version for web scraping and crawling.
-
-## Prerequisites
-
-- [Docker](https://www.docker.com/products/docker-desktop/) installed on your system
-- [Python](https://www.python.org/downloads/) 3.8 or higher
-- Required Python packages: `requests`, `pandas`, `asyncio`
-
-## Setup
-
-1. **Install Dependencies**
-
+**Example Request (curl)**:
 ```bash
-pip install requests pandas asyncio
+curl -X POST "http://localhost:5000/analyze" \
+  -H "Content-Type: application/json" \
+  -H "api-key: your_chosen_api_key_here" \
+  -d '{"url": "https://example.com"}'
 ```
 
-2. **Start Firecrawl Services**
-
-Run the batch script to start all required Docker containers:
-
-```bash
-start_firecrawl.bat
+**Success Response**:
+```json
+{
+  "url": "https://example.com",
+  "description": "This webpage is a simple example domain used for illustrative purposes in documentation. It provides a brief explanation that example domains like this one are reserved for use in examples and documentation as per RFC 2606.",
+  "model_used": "gpt-4.1-nano-2025-04-14"
+}
 ```
-
-This will start three Docker containers:
-- `firecrawl` (main API service)
-- `playwright-service` (web browser automation service)
-- `redis` (queue and caching service)
-
-The Firecrawl API will be available at: http://localhost:3002
-
-3. **Test the API Connection**
-
-Run the test script to verify that the API is working:
-
-```bash
-python test_firecrawl_api.py
-```
-
-This will make a simple request to scrape example.com and display the results.
-
-## Usage
-
-### Web Crawling
-
-To crawl a website and map its structure:
-
-```bash
-python test_pages.py
-```
-
-This will:
-1. Submit a crawl job to the local Firecrawl API
-2. Wait for the job to complete
-3. Process the results
-4. Save the data to a CSV file
-
-### Customization
-
-You can modify `test_pages.py` to:
-- Change the target URL
-- Adjust the maximum number of pages to crawl
-- Change the output formats
-- Process the data differently
-
-## Troubleshooting
-
-- If you encounter connection errors, make sure the Docker containers are running
-- Check the Docker logs for any errors:
-  ```bash
-  docker logs firecrawl_firecrawl_1
-  ```
-- Ensure ports 3000, 3002, and 6379 are not being used by other applications
-
-## References
-
-- [Firecrawl GitHub Repository](https://github.com/mendableai/firecrawl)
-- [Firecrawl Documentation](https://docs.firecrawl.dev/)
-
-# Web Crawler API
-
-This API provides functionality to crawl websites and extract information from web pages. It supports both simple requests-based crawling and Selenium-based crawling for JavaScript-heavy sites.
-
-## Setup
-
-The API server is already running on `http://localhost:5000`.
-
-## API Status
-
-✅ **CONFIRMED WORKING**: The API is running and has been tested successfully.
-
-## Testing with Postman
-
-1. Open Postman
-2. Import the collection file `web_crawler_api.postman_collection.json` included in this repository
-3. Use the included requests to test the API
-
-### Quick Postman Setup
-
-1. Create a new request in Postman
-2. Set the request URL to `http://localhost:5000/api/health` and method to `GET`
-3. Send the request to verify the API is running
-4. Create another request with URL `http://localhost:5000/api/crawl` and method `POST`
-5. Add headers:
-   - Key: `api-key`, Value: `this_is_very_stupid_key_for_this_api`
-   - Key: `Content-Type`, Value: `application/json`
-6. Add body (raw JSON):
-   ```json
-   {
-     "url": "https://example.com",
-     "max_pages": 10,
-     "use_selenium": true
-   }
-   ```
-7. Send the request to start a crawl job
-8. Copy the `job_id` from the response
-9. Create a GET request to `http://localhost:5000/api/crawl/{job_id}` (replace `{job_id}` with the actual ID)
-10. Add the `api-key` header and send the request to check the job status
-
-## API Endpoints
 
 ### Health Check
 
-Check if the API is running.
+**Endpoint**: `/health`
 
-- **URL**: `/api/health`
-- **Method**: `GET`
-- **Authentication**: Not required
-- **Response Example**:
-  ```json
-  {
-    "status": "ok",
-    "message": "Web Crawler API is running"
+**Method**: `GET`
+
+**Response**:
+```json
+{
+  "status": "ok",
+  "components": {
+    "service_api_key": "configured",
+    "openai_api_key": "configured",
+    "openai_client": "initialized"
   }
-  ```
+}
+```
 
-### Start a Crawl Job
+## Error Handling
 
-Start a new web crawling job.
+The API returns appropriate HTTP status codes and descriptive error messages:
 
-- **URL**: `/api/crawl`
-- **Method**: `POST`
-- **Headers**: 
-  - `api-key`: `this_is_very_stupid_key_for_this_api`
-  - `Content-Type`: `application/json`
-- **Request Body**:
-  ```json
-  {
-    "url": "https://example.com",
-    "max_pages": 10,
-    "use_selenium": true
-  }
-  ```
-- **Response Example**:
-  ```json
-  {
-    "job_id": "1234-5678-90ab-cdef",
-    "status": "running",
-    "message": "Crawl job started successfully"
-  }
-  ```
+- **400**: Bad Request (invalid URL, missing parameters)
+- **401**: Unauthorized (invalid or missing API key)
+- **500**: Internal Server Error (unexpected issues)
+- **502**: Bad Gateway (issues fetching URL content)
+- **503**: Service Unavailable (OpenAI API issues)
+- **504**: Gateway Timeout (URL fetch timeout)
 
-### Get Crawl Job Status
+## Deployment
 
-Check the status of a crawl job and get results if complete.
+For production deployment:
 
-- **URL**: `/api/crawl/{job_id}`
-- **Method**: `GET`
-- **Headers**: 
-  - `api-key`: `this_is_very_stupid_key_for_this_api`
-- **Response Example (Completed)**:
-  ```json
-  {
-    "job_id": "c0ec11c2-c4dd-491b-9ab6-63485a81cbbf",
-    "url": "example.com",
-    "status": "completed",
-    "total_pages": 1,
-    "results": [
-      {
-        "url": "https://example.com",
-        "title": "Example Domain",
-        "description": "",
-        "status_code": 200
-      }
-    ]
-  }
-  ```
+1. **Set Environment Variables**:
+   Ensure `SERVICE_API_KEY` and `OPENAI_API_KEY` are set in your production environment.
 
-### List All Crawl Jobs
+2. **Run with a Production WSGI Server**:
+   ```bash
+   pip install gunicorn  # on Linux/macOS
+   gunicorn -w 4 -b 0.0.0.0:5000 grand_spider:app
+   ```
+   
+   For Windows, consider using waitress:
+   ```bash
+   pip install waitress
+   waitress-serve --host=0.0.0.0 --port=5000 grand_spider:app
+   ```
 
-Get a list of all crawl jobs.
+## Configuration Options
 
-- **URL**: `/api/crawl`
-- **Method**: `GET`
-- **Headers**: 
-  - `api-key`: `this_is_very_stupid_key_for_this_api`
-- **Response Example**:
-  ```json
-  {
-    "jobs": [
-      {
-        "job_id": "c0ec11c2-c4dd-491b-9ab6-63485a81cbbf",
-        "url": "example.com",
-        "status": "completed",
-        "created_at": 1745748433.2292097
-      }
-    ],
-    "total": 1
-  }
-  ```
+The following environment variables can be configured:
 
-## Common Issues
+- `SERVICE_API_KEY`: Required for authentication
+- `OPENAI_API_KEY`: Required for OpenAI API access
+- `OPENAI_MODEL`: The OpenAI model to use (default: "gpt-4.1-nano-2025-04-14")
+- `REQUEST_TIMEOUT`: Timeout for URL fetching in seconds (default: 15)
+- `MAX_CONTENT_LENGTH`: Maximum HTML content length to analyze (default: 15000)
+- `MAX_RESPONSE_TOKENS`: Maximum tokens in the OpenAI response (default: 300)
 
-- Make sure to use the correct endpoints:
-  - To check job status: `/api/crawl/{job_id}` (not `/api/job_status/{job_id}`)
-- All endpoints except `/api/health` require the `api-key` header
-- Ensure URLs include the protocol (https:// or http://)
+## License
+
+[MIT License](https://opensource.org/licenses/MIT)
+
+## Disclaimer
+
+This tool is designed for analyzing publicly accessible web content. Always respect robots.txt, website terms of service, and avoid excessive requests to the same domain.
 
