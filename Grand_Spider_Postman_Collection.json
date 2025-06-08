@@ -1,0 +1,157 @@
+{
+  "info": {
+    "name": "Grand Spider API",
+    "description": "Company analysis API endpoints",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000",
+      "type": "string"
+    },
+    {
+      "key": "apiKey",
+      "value": "your_secret_api_key_here",
+      "type": "string"
+    },
+    {
+      "key": "jobId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "health"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Start Analysis Job (Simple Crawler)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 202) {",
+              "    const response = pm.response.json();",
+              "    pm.collectionVariables.set('jobId', response.job_id);",
+              "    console.log('Job ID saved: ' + response.job_id);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "api-key",
+            "value": "{{apiKey}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"url\": \"https://example.com\",\n    \"max_pages\": 5,\n    \"use_selenium\": false\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/analyze-company",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "analyze-company"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Start Analysis Job (Selenium Crawler)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 202) {",
+              "    const response = pm.response.json();",
+              "    pm.collectionVariables.set('jobId', response.job_id);",
+              "    console.log('Job ID saved: ' + response.job_id);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "api-key",
+            "value": "{{apiKey}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"url\": \"https://react-heavy-site.com\",\n    \"max_pages\": 3,\n    \"use_selenium\": true\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/analyze-company",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "analyze-company"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Check Job Status",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "api-key",
+            "value": "{{apiKey}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/analyze-company/{{jobId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "analyze-company", "{{jobId}}"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "List All Jobs",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "api-key",
+            "value": "{{apiKey}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/jobs",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "jobs"]
+        }
+      },
+      "response": []
+    }
+  ]
+} 
