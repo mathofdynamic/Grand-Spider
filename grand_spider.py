@@ -243,33 +243,50 @@ def fetch_full_html_content(url: str) -> str:
 
 
 def generate_xpath_for_element(element, soup):
-    """Generate useful xpath queries for a given BeautifulSoup element."""
+    """Generate generic xpath queries that work across different users/profiles."""
     if not element or not element.name:
         return ""
     
     xpath_queries = []
     tag_name = element.name
     
-    # 1. XPath by ID (most specific)
+    # 1. XPath by ID (only if generic/meaningful and stable)
     if element.get('id'):
         element_id = element.get('id')
-        # Only use IDs that look meaningful (not auto-generated)
-        if not any(char.isdigit() for char in element_id) or len(element_id) < 15:
+        # Only use IDs that are stable (not dynamic/auto-generated)
+        # Avoid: dynamic IDs, random strings, auto-generated patterns
+        is_dynamic_id = (
+            len(element_id) > 10 and any(char.isdigit() for char in element_id) or  # Long IDs with numbers
+            '__' in element_id or  # Auto-generated patterns like id__abc123
+            element_id.startswith('id_') or  # Generated ID patterns
+            len([c for c in element_id if c.isdigit()]) > 3 or  # Too many numbers
+            any(pattern in element_id.lower() for pattern in ['random', 'temp', 'gen', 'auto'])  # Generated indicators
+        )
+        
+        # Only use stable, meaningful IDs
+        stable_ids = ['react-root', 'app', 'main', 'header', 'footer', 'content', 'nav', 'menu']
+        if (not is_dynamic_id and 
+            (element_id in stable_ids or (len(element_id) < 8 and not any(char.isdigit() for char in element_id))) and
+            not any(social_term in element_id.lower() for social_term in ['username', 'user_', 'profile_'])):
             xpath_queries.append(f"//{tag_name}[@id='{element_id}']")
     
-    # 2. XPath by meaningful text content FIRST (highest priority)
+    # 2. XPath by generic text patterns (avoid user-specific content)
     if element.get_text(strip=True):
         text = element.get_text(strip=True)
-        # Prioritize common action words and short meaningful text
+        # Generic action words only (no specific counts, usernames, etc.)
         action_words = ['follow', 'following', 'unfollow', 'like', 'share', 'comment', 'login', 'sign', 'submit', 'home', 
                        'profile', 'search', 'menu', 'save', 'edit', 'delete', 'add', 'create', 
                        'more', 'view', 'show', 'hide', 'close', 'open', 'next', 'previous', 
                        'back', 'forward', 'up', 'down', 'settings', 'options', 'message', 'send',
-                       # Multi-language follow terms
-                       'seguir', 'segui', 'folgen', 'suivre', 'フォロー', '关注', '팔로우']
+                       'posts', 'story', 'stories', 'reels', 'tagged']
         
+        # Only use text if it's a generic action word, not user-specific data
         if (len(text) > 1 and len(text) < 30 and 
-            not text.isdigit() and 
+            not text.replace('.', '').replace('M', '').replace('K', '').replace(',', '').isdigit() and  # Skip follower counts
+            not any(char.isdigit() for char in text) and  # Skip any text containing numbers (post counts, etc.)
+            not '@' in text and  # Skip usernames
+            not 'followers' in text.lower() and not 'following' in text.lower() and  # Skip follower counts
+            not 'posts' in text.lower() and  # Skip post counts like "604posts"
             any(word in text.lower() for word in action_words)):
             # Escape single quotes in text
             escaped_text = text.replace("'", "\\'")
@@ -277,12 +294,12 @@ def generate_xpath_for_element(element, soup):
             # Also add exact text match
             xpath_queries.append(f"//{tag_name}[text()='{escaped_text}']")
     
-    # 3. XPath by semantic attributes (high priority)
+    # 3. XPath by semantic attributes (high priority) - Filter out user-specific data
     semantic_attrs = {
         'role': ['button', 'link', 'menu', 'dialog', 'tab', 'tablist', 'navigation', 'main', 'banner', 'contentinfo'],
         'type': ['button', 'submit', 'text', 'password', 'email', 'search', 'file', 'checkbox', 'radio'],
         'aria-label': None,  # Any aria-label is valuable
-        'data-testid': None,  # Test IDs are very valuable
+        'data-testid': None,  # Test IDs are very valuable but need filtering
         'name': None,  # Form element names
         'placeholder': None,  # Input placeholders
         'alt': None,  # Image alt text
@@ -293,20 +310,68 @@ def generate_xpath_for_element(element, soup):
         if element.get(attr):
             attr_value = element.get(attr)
             if valid_values is None or attr_value in valid_values:
-                # Keep attribute values short and meaningful
+                # Keep attribute values short and meaningful, but avoid user-specific content
                 if len(attr_value) < 50:
-                    xpath_queries.append(f"//{tag_name}[@{attr}='{attr_value}']")
+                    # For alt text, create generic patterns instead of specific text
+                    if attr == 'alt':
+                        if 'profile picture' in attr_value.lower():
+                            xpath_queries.append(f"//{tag_name}[contains(@alt, 'profile picture')]")
+                        elif 'highlight' in attr_value.lower():
+                            xpath_queries.append(f"//{tag_name}[contains(@alt, 'highlight')]")
+                        elif 'story' in attr_value.lower():
+                            xpath_queries.append(f"//{tag_name}[contains(@alt, 'story')]")
+                        # Skip user-specific alt text with @usernames
+                        elif not '@' in attr_value and not any(char.isdigit() for char in attr_value):
+                            xpath_queries.append(f"//{tag_name}[@{attr}='{attr_value}']")
+                    elif attr == 'data-testid':
+                        # For data-testid, filter out user IDs and create generic patterns
+                        if '-follow' in attr_value:
+                            # Generic follow button pattern instead of user-specific
+                            xpath_queries.append(f"//{tag_name}[contains(@data-testid, '-follow')]")
+                        elif '-like' in attr_value:
+                            xpath_queries.append(f"//{tag_name}[contains(@data-testid, '-like')]")
+                        elif '-retweet' in attr_value:
+                            xpath_queries.append(f"//{tag_name}[contains(@data-testid, '-retweet')]")
+                        elif not any(char.isdigit() for char in attr_value):
+                            # Only use data-testid if it doesn't contain user IDs (numbers)
+                            xpath_queries.append(f"//{tag_name}[@data-testid='{attr_value}']")
+                    elif attr == 'aria-label':
+                        # For aria-label, create patterns that avoid specific numbers/usernames
+                        if 'like' in attr_value.lower() and not any(char.isdigit() for char in attr_value):
+                            xpath_queries.append(f"//{tag_name}[contains(@aria-label, 'Like')]")
+                        elif 'follow' in attr_value.lower():
+                            xpath_queries.append(f"//{tag_name}[contains(@aria-label, 'follow')]")
+                        elif not '@' in attr_value and not any(char.isdigit() for char in attr_value):
+                            xpath_queries.append(f"//{tag_name}[@aria-label='{attr_value}']")
+                    else:
+                        # For other attributes, use as-is if they don't contain user-specific data
+                        if not '@' in attr_value and not any(user_term in attr_value.lower() for user_term in ['username', 'user_id', 'profile_']) and not any(char.isdigit() for char in attr_value):
+                            xpath_queries.append(f"//{tag_name}[@{attr}='{attr_value}']")
     
-    # 4. XPath by href patterns (for links)
+    # 4. XPath by href patterns (for links) - Use generic patterns only
     if element.get('href'):
         href = element.get('href')
         if href and len(href) < 100:  # Avoid very long URLs
-            xpath_queries.append(f"//{tag_name}[@href='{href}']")
-            # Also add partial href match for relative URLs
-            if '/' in href:
-                last_part = href.split('/')[-1]
-                if last_part and len(last_part) > 2:
-                    xpath_queries.append(f"//{tag_name}[contains(@href, '{last_part}')]")
+            # Check if URL contains user-specific paths
+            has_user_path = any(user_indicator in href.lower() for user_indicator in ['/@', '/user/', '/profile/', '/followers/', '/following/'])
+            # Also check for direct username patterns like '/username/'
+            is_likely_username = href.count('/') >= 2 and not href.startswith('http') and len(href.split('/')[-2]) > 2
+            
+            if not has_user_path and not is_likely_username:
+                xpath_queries.append(f"//{tag_name}[@href='{href}']")
+            else:
+                # For user-specific URLs, create generic patterns
+                if '/followers/' in href:
+                    xpath_queries.append(f"//{tag_name}[contains(@href, '/followers/')]")
+                elif '/following/' in href:
+                    xpath_queries.append(f"//{tag_name}[contains(@href, '/following/')]")
+                elif href.startswith('/@'):
+                    xpath_queries.append(f"//{tag_name}[starts-with(@href, '/@')]")
+                elif '/profile/' in href:
+                    xpath_queries.append(f"//{tag_name}[contains(@href, '/profile/')]")
+                elif is_likely_username:
+                    # For patterns like '/username/', create a more generic selector
+                    xpath_queries.append(f"//{tag_name}[@href and string-length(@href) > 1]")
     
     # 5. XPath by src patterns (for images/media)
     if element.get('src'):
@@ -427,6 +492,12 @@ def extract_all_elements(html_content: str) -> dict:
         'like_buttons': ['[aria-label*="like" i]', '[data-testid*="like"]', '.like-button', 'button[aria-label*="like" i]'],
         'share_buttons': ['[aria-label*="share" i]', '[data-testid*="share"]', '.share-button', 'button[aria-label*="share" i]'],
         'comment_buttons': ['[aria-label*="comment" i]', '[data-testid*="comment"]', '.comment-button', 'button[aria-label*="comment" i]'],
+        'retweet_buttons': ['[aria-label*="retweet" i]', '[data-testid*="retweet"]', 'button[aria-label*="retweet" i]'],
+        'follower_counts': ['[href*="/followers"]', 'a[href*="/followers"]', 'span:contains("followers")', 'div:contains("followers")'],
+        'following_counts': ['[href*="/following"]', 'a[href*="/following"]', 'span:contains("following")', 'div:contains("following")'],
+        'post_counts': ['span:contains("posts")', 'div:contains("posts")', 'span:contains("tweets")', 'div:contains("tweets")'],
+        'tweet_content': ['[data-testid="tweetText"]', 'div[data-testid="tweetText"]'],
+        'user_profiles': ['[data-testid="UserCell"]', 'div[data-testid="UserCell"]'],
         'follow_buttons': [
             '[aria-label*="follow" i]', '[data-testid*="follow"]', '.follow-button',
             'button[aria-label*="follow" i]', 'div[aria-label*="follow" i]',
@@ -470,6 +541,9 @@ def extract_all_elements(html_content: str) -> dict:
         'maps': ['[class*="map"]', 'iframe[src*="maps"]'],
         'charts': ['canvas[class*="chart"]', 'svg[class*="chart"]']
     }
+    
+    # Initialize set to track sophisticated patterns (prevent duplication)
+    sophisticated_patterns_added = set()
     
     # Find elements and generate xpath queries
     for element_name, selectors in element_categories.items():
@@ -569,19 +643,82 @@ def extract_all_elements(html_content: str) -> dict:
                         found_elements = soup.find_all(selector)
                 
                 # Generate xpath for found elements (limit to avoid too many results)
-                for element in found_elements[:5]:  # Limit to 5 elements per selector
+                for element in found_elements[:3]:  # Reduced to 3 to avoid duplication
                     xpaths = generate_xpath_for_element(element, soup)
                     for xpath in xpaths:
                         if xpath and xpath not in xpath_list:
                             xpath_list.append(xpath)
+                
+                # Add sophisticated patterns for specific element types (always add if element found)
+                if element_name == 'follower_counts' and 'follower_counts' not in sophisticated_patterns_added:
+                    xpath_list.append("//a[contains(@href, '/followers') and string-length(normalize-space(text())) > 0 and not(contains(text(), '@')) and not(@aria-hidden='true') and normalize-space(text()) != '·']")
+                    sophisticated_patterns_added.add('follower_counts')
+                    
+                if element_name == 'following_counts' and 'following_counts' not in sophisticated_patterns_added:
+                    xpath_list.append("//a[contains(@href, '/following') and string-length(normalize-space(text())) > 0 and not(contains(text(), '@')) and not(@aria-hidden='true') and normalize-space(text()) != '·']")
+                    sophisticated_patterns_added.add('following_counts')
+                    
+                if element_name == 'tweet_content' and 'tweet_content' not in sophisticated_patterns_added:
+                    xpath_list.append("//div[@data-testid='tweetText' and string-length(normalize-space(text())) > 0 and not(contains(text(), '@')) and not(contains(text(), 'Ad')) and not(@aria-hidden='true') and normalize-space(text()) != '·']")
+                    xpath_list.append(".//span[not(ancestor::*[@data-testid='app-text-transition-container']) and not(ancestor::*[@data-testid='tweetText']) and string-length(normalize-space(text())) > 0 and not(contains(text(), '@')) and not(contains(text(), 'Ad')) and not(@aria-hidden='true') and normalize-space(text()) != '·']")
+                    sophisticated_patterns_added.add('tweet_content')
+                    
+                if element_name == 'follow_buttons' and 'follow_buttons' not in sophisticated_patterns_added:
+                    xpath_list.append("//button[contains(@data-testid, '-follow') and not(@aria-hidden='true') and not(@disabled)]")
+                    xpath_list.append("//button[contains(text(), 'Follow') and not(contains(text(), 'Following')) and string-length(normalize-space(text())) > 0 and not(@aria-hidden='true')]") 
+                    sophisticated_patterns_added.add('follow_buttons')
+                    
+                if element_name == 'like_buttons' and 'like_buttons' not in sophisticated_patterns_added:
+                    xpath_list.append("//button[contains(@data-testid, 'like') and not(@aria-hidden='true') and not(@disabled)]")
+                    xpath_list.append("//button[contains(@aria-label, 'Like') and not(contains(@aria-label, 'Unlike')) and not(@aria-hidden='true')]")
+                    sophisticated_patterns_added.add('like_buttons')
+                    
+                if element_name == 'retweet_buttons' and 'retweet_buttons' not in sophisticated_patterns_added:
+                    xpath_list.append("//button[contains(@data-testid, 'retweet') and not(@aria-hidden='true') and not(@disabled)]")
+                    xpath_list.append("//button[contains(@aria-label, 'Retweet') and not(@aria-hidden='true')]")
+                    sophisticated_patterns_added.add('retweet_buttons')
+                    
+                if element_name == 'user_profiles' and 'user_profiles' not in sophisticated_patterns_added:
+                    xpath_list.append("//div[@data-testid='UserCell' and string-length(normalize-space(text())) > 0 and not(@aria-hidden='true')]")
+                    sophisticated_patterns_added.add('user_profiles')
+                    
+                if element_name == 'post_counts' and 'post_counts' not in sophisticated_patterns_added:
+                    xpath_list.append("//span[contains(text(), 'posts') and string-length(normalize-space(text())) > 0 and not(contains(text(), '@')) and not(@aria-hidden='true')]")
+                    xpath_list.append("//span[contains(text(), 'tweets') and string-length(normalize-space(text())) > 0 and not(contains(text(), '@')) and not(@aria-hidden='true')]")
+                    sophisticated_patterns_added.add('post_counts')
                         
             except Exception as e:
                 logger.debug(f"Error processing selector '{selector}': {e}")
                 continue
         
         if xpath_list:
-            elements_map[element_name] = xpath_list
-            logger.info(f"Found {len(xpath_list)} {element_name} elements")
+            # Remove duplicates while preserving order and filter out only obvious user-specific patterns
+            seen = set()
+            filtered_xpath_list = []
+            for xpath in xpath_list:
+                # Filter out user-specific patterns AND dynamic IDs
+                is_user_specific = any(username_indicator in xpath for username_indicator in 
+                                     ['mohamad', 'xpression_app', 'old.time.hawkey', 'profile_images/', 'profile_banners/'])
+                
+                # Filter out dynamic/unstable IDs (like client mentioned)
+                is_dynamic_xpath = any(dynamic_pattern in xpath for dynamic_pattern in [
+                    'id__', '@id=\'id_', 'random', 'temp', 'gen_', 'auto_'
+                ]) or (
+                    '@id=' in xpath and 
+                    any(char.isdigit() for char in xpath) and 
+                    len([c for c in xpath if c.isdigit()]) > 4  # More than 4 digits suggests dynamic ID
+                )
+                
+                if xpath not in seen and not is_user_specific and not is_dynamic_xpath:
+                    seen.add(xpath)
+                    filtered_xpath_list.append(xpath)
+            
+            # Limit to reasonable number of XPath patterns per element type
+            if len(filtered_xpath_list) > 10:
+                filtered_xpath_list = filtered_xpath_list[:10]
+                
+            elements_map[element_name] = filtered_xpath_list
+            logger.info(f"Found {len(filtered_xpath_list)} {element_name} elements")
     
     logger.info(f"Total element types found: {len(elements_map)}")
     return elements_map
