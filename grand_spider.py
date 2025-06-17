@@ -48,30 +48,49 @@ if not OPENAI_API_KEY:
 
 try:
     if OPENAI_API_KEY:
-        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        # Initialize OpenAI client with basic configuration
+        openai_client = OpenAI(
+            api_key=OPENAI_API_KEY,
+            timeout=30.0,
+            max_retries=3
+        )
         logger.info("OpenAI client initialized successfully.")
     else:
         openai_client = None
         logger.error("OpenAI client could not be initialized: OPENAI_API_KEY is missing.")
 except Exception as e:
     logger.error(f"Failed to initialize OpenAI client: {e}")
-    openai_client = None
+    logger.error("Attempting fallback initialization...")
+    try:
+        if OPENAI_API_KEY:
+            # Fallback: minimal initialization
+            openai_client = OpenAI(api_key=OPENAI_API_KEY)
+            logger.info("OpenAI client initialized with fallback method.")
+        else:
+            openai_client = None
+    except Exception as fallback_error:
+        logger.error(f"Fallback initialization also failed: {fallback_error}")
+        openai_client = None
 
 # --- Constants ---
 REQUEST_TIMEOUT = 15
 SELENIUM_TIMEOUT = 20
 MAX_CONTENT_LENGTH = 15000
-OPENAI_MODEL = "gpt-4o-mini"
+OPENAI_MODEL = "gpt-4.1-nano-2025-04-14"
 MAX_RESPONSE_TOKENS_PAGE = 300
 MAX_RESPONSE_TOKENS_SUMMARY = 500
 MAX_RESPONSE_TOKENS_PROSPECT = 800 # Tokens for the new prospect analysis
+# GPT-4.1 nano specifications:
+# - Context window: 1,047,576 tokens
+# - Max output tokens: 32,768 tokens
 CRAWLER_USER_AGENT = 'GrandSpiderCompanyAnalyzer/1.1 (+http://yourappdomain.com/bot)'
 REPORTS_DIR = "reports" # Directory for CSV reports
 
-# --- OpenAI Pricing (as of late 2024 for gpt-4o-mini, check for updates) ---
+# --- OpenAI Pricing for GPT-4.1 nano ---
 # Prices are per 1 Million tokens
-GPT4O_MINI_INPUT_COST_PER_M_TOKENS = 0.15
-GPT4O_MINI_OUTPUT_COST_PER_M_TOKENS = 0.60
+GPT4O_MINI_INPUT_COST_PER_M_TOKENS = 0.10     # Input tokens: $0.10 per 1M tokens
+GPT4O_MINI_OUTPUT_COST_PER_M_TOKENS = 0.40    # Output tokens: $0.40 per 1M tokens
+GPT4O_MINI_CACHED_INPUT_COST_PER_M_TOKENS = 0.025  # Cached input: $0.025 per 1M tokens
 
 
 # --- Job Management (Thread-Safe) ---
@@ -205,6 +224,367 @@ def fetch_url_content(url: str) -> str:
         raise TimeoutError(f"Request timed out for {url}")
     except requests.exceptions.RequestException as req_err:
         raise ConnectionError(f"Failed to fetch URL content: {req_err}")
+
+def fetch_full_html_content(url: str) -> str:
+    """Fetch the complete HTML source code of a URL."""
+    headers = {'User-Agent': CRAWLER_USER_AGENT}
+    try:
+        response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+        response.raise_for_status()
+        content_type = response.headers.get('Content-Type', '').lower()
+        if 'text/html' not in content_type:
+            logger.warning(f"URL {url} returned non-HTML content type: {content_type}.")
+        response.encoding = response.apparent_encoding
+        return response.text
+    except requests.exceptions.Timeout:
+        raise TimeoutError(f"Request timed out for {url}")
+    except requests.exceptions.RequestException as req_err:
+        raise ConnectionError(f"Failed to fetch URL content: {req_err}")
+
+
+def generate_xpath_for_element(element, soup):
+    """Generate useful xpath queries for a given BeautifulSoup element."""
+    if not element or not element.name:
+        return ""
+    
+    xpath_queries = []
+    tag_name = element.name
+    
+    # 1. XPath by ID (most specific)
+    if element.get('id'):
+        element_id = element.get('id')
+        # Only use IDs that look meaningful (not auto-generated)
+        if not any(char.isdigit() for char in element_id) or len(element_id) < 15:
+            xpath_queries.append(f"//{tag_name}[@id='{element_id}']")
+    
+    # 2. XPath by meaningful text content FIRST (highest priority)
+    if element.get_text(strip=True):
+        text = element.get_text(strip=True)
+        # Prioritize common action words and short meaningful text
+        action_words = ['follow', 'following', 'unfollow', 'like', 'share', 'comment', 'login', 'sign', 'submit', 'home', 
+                       'profile', 'search', 'menu', 'save', 'edit', 'delete', 'add', 'create', 
+                       'more', 'view', 'show', 'hide', 'close', 'open', 'next', 'previous', 
+                       'back', 'forward', 'up', 'down', 'settings', 'options', 'message', 'send',
+                       # Multi-language follow terms
+                       'seguir', 'segui', 'folgen', 'suivre', 'フォロー', '关注', '팔로우']
+        
+        if (len(text) > 1 and len(text) < 30 and 
+            not text.isdigit() and 
+            any(word in text.lower() for word in action_words)):
+            # Escape single quotes in text
+            escaped_text = text.replace("'", "\\'")
+            xpath_queries.append(f"//{tag_name}[contains(text(), '{escaped_text}')]")
+            # Also add exact text match
+            xpath_queries.append(f"//{tag_name}[text()='{escaped_text}']")
+    
+    # 3. XPath by semantic attributes (high priority)
+    semantic_attrs = {
+        'role': ['button', 'link', 'menu', 'dialog', 'tab', 'tablist', 'navigation', 'main', 'banner', 'contentinfo'],
+        'type': ['button', 'submit', 'text', 'password', 'email', 'search', 'file', 'checkbox', 'radio'],
+        'aria-label': None,  # Any aria-label is valuable
+        'data-testid': None,  # Test IDs are very valuable
+        'name': None,  # Form element names
+        'placeholder': None,  # Input placeholders
+        'alt': None,  # Image alt text
+        'title': None  # Title attributes
+    }
+    
+    for attr, valid_values in semantic_attrs.items():
+        if element.get(attr):
+            attr_value = element.get(attr)
+            if valid_values is None or attr_value in valid_values:
+                # Keep attribute values short and meaningful
+                if len(attr_value) < 50:
+                    xpath_queries.append(f"//{tag_name}[@{attr}='{attr_value}']")
+    
+    # 4. XPath by href patterns (for links)
+    if element.get('href'):
+        href = element.get('href')
+        if href and len(href) < 100:  # Avoid very long URLs
+            xpath_queries.append(f"//{tag_name}[@href='{href}']")
+            # Also add partial href match for relative URLs
+            if '/' in href:
+                last_part = href.split('/')[-1]
+                if last_part and len(last_part) > 2:
+                    xpath_queries.append(f"//{tag_name}[contains(@href, '{last_part}')]")
+    
+    # 5. XPath by src patterns (for images/media)
+    if element.get('src'):
+        src = element.get('src')
+        if src and len(src) < 100:  # Avoid very long URLs
+            xpath_queries.append(f"//{tag_name}[@src='{src}']")
+    
+    # 6. Only use meaningful class names as last resort
+    if element.get('class') and len(xpath_queries) < 3:  # Only if we don't have enough good XPaths
+        classes = element.get('class')
+        # Look for semantic class patterns only
+        semantic_class_patterns = ['btn', 'button', 'nav', 'menu', 'header', 'footer', 'main', 'content', 
+                                 'post', 'story', 'like', 'share', 'comment', 'follow', 'profile', 'image', 
+                                 'video', 'link', 'form', 'input', 'submit', 'search', 'login', 'signup',
+                                 'modal', 'popup', 'dropdown', 'tab', 'accordion', 'carousel', 'slider']
+        
+        for cls in classes:
+            # Only use classes that contain semantic patterns and are not auto-generated
+            if (any(pattern in cls.lower() for pattern in semantic_class_patterns) and
+                len(cls) > 3 and len(cls) < 25 and
+                not cls.startswith('x') and  # Skip Facebook/React classes starting with 'x'
+                not cls.startswith('_') and  # Skip auto-generated classes starting with '_'
+                cls.count('x') < 2):  # Skip classes with multiple 'x' characters
+                xpath_queries.append(f"//{tag_name}[contains(@class, '{cls}')]")
+                break  # Only use the first meaningful class
+    
+    # 7. Fallback: Only use simple tag-based XPath if we have very few results
+    if len(xpath_queries) < 2:
+        # Add simple tag selector as fallback
+        xpath_queries.append(f"//{tag_name}")
+        
+        # Add position-based xpath only as absolute last resort for unique elements
+        if tag_name in ['form', 'main', 'header', 'footer', 'nav']:
+            xpath_parts = []
+            current = element
+            depth = 0
+            
+            while current and current.name and depth < 5:  # Limit depth to avoid very long paths
+                current_tag = current.name
+                siblings = [s for s in current.parent.find_all(current_tag, recursive=False) if s.name == current_tag] if current.parent else [current]
+                
+                if len(siblings) > 1:
+                    try:
+                        index = siblings.index(current) + 1
+                        xpath_parts.append(f"{current_tag}[{index}]")
+                    except ValueError:
+                        xpath_parts.append(current_tag)
+                else:
+                    xpath_parts.append(current_tag)
+                
+                current = current.parent
+                depth += 1
+                if current and current.name == '[document]':
+                    break
+            
+            xpath_parts.reverse()
+            if xpath_parts and len(xpath_parts) <= 5:  # Only use short paths
+                xpath_queries.append("/" + "/".join(xpath_parts))
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_xpaths = []
+    for xpath in xpath_queries:
+        if xpath not in seen:
+            seen.add(xpath)
+            unique_xpaths.append(xpath)
+    
+    return unique_xpaths[:5]  # Return top 5 most useful xpaths
+
+def extract_all_elements(html_content: str) -> dict:
+    """Extract all elements and their xpath queries from any HTML content."""
+    soup = BeautifulSoup(html_content, 'html.parser')
+    elements_map = {}
+    
+    # Add debugging info
+    total_tags = len(soup.find_all())
+    logger.info(f"Found {total_tags} total HTML tags in the page")
+    
+    # Define element categories to search for
+    element_categories = {
+        # Interactive Elements
+        'buttons': ['button', '[role="button"]', 'input[type="button"]', 'input[type="submit"]'],
+        'links': ['a[href]'],
+        'inputs': ['input', 'textarea', 'select'],
+        'forms': ['form'],
+        
+        # Content Elements
+        'images': ['img'],
+        'videos': ['video'],
+        'audio': ['audio'],
+        'paragraphs': ['p'],
+        'headings': ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+        'lists': ['ul', 'ol', 'li'],
+        'tables': ['table', 'tbody', 'thead', 'tr', 'td', 'th'],
+        
+        # Layout Elements
+        'divs': ['div'],
+        'spans': ['span'],
+        'sections': ['section'],
+        'articles': ['article'],
+        'headers': ['header'],
+        'footers': ['footer'],
+        'navigation': ['nav', '[role="navigation"]'],
+        'main_content': ['main', '[role="main"]'],
+        'sidebars': ['aside', '.sidebar'],
+        
+        # Common UI Elements
+        'modal_dialogs': ['[role="dialog"]', '.modal', '.popup'],
+        'dropdown_menus': ['[role="menu"]', '.dropdown', 'select'],
+        'tabs': ['[role="tab"]', '[role="tablist"]', '.tab'],
+        'accordions': ['[role="button"][aria-expanded]', '.accordion'],
+        'tooltips': ['[role="tooltip"]', '.tooltip'],
+        'alerts': ['[role="alert"]', '.alert', '.notification'],
+        'progress_bars': ['[role="progressbar"]', 'progress', '.progress'],
+        'search_boxes': ['input[type="search"]', '[placeholder*="search" i]', '[aria-label*="search" i]'],
+        
+        # Social Media Specific Elements
+        'like_buttons': ['[aria-label*="like" i]', '[data-testid*="like"]', '.like-button', 'button[aria-label*="like" i]'],
+        'share_buttons': ['[aria-label*="share" i]', '[data-testid*="share"]', '.share-button', 'button[aria-label*="share" i]'],
+        'comment_buttons': ['[aria-label*="comment" i]', '[data-testid*="comment"]', '.comment-button', 'button[aria-label*="comment" i]'],
+        'follow_buttons': [
+            '[aria-label*="follow" i]', '[data-testid*="follow"]', '.follow-button',
+            'button[aria-label*="follow" i]', 'div[aria-label*="follow" i]',
+            'button:contains("Follow")', 'button:contains("follow")', 'button:contains("Following")',
+            'div[role="button"]:contains("Follow")', 'div[role="button"]:contains("follow")',
+            '[data-testid*="Follow"]', '[aria-label*="Follow"]',
+            'button[data-testid*="follow"]', 'div[data-testid*="follow"]',
+            # Additional patterns for different languages and contexts
+            '[aria-label*="seguir" i]', '[aria-label*="folgen" i]', '[aria-label*="suivre" i]',
+            'button[title*="follow" i]', 'div[title*="follow" i]',
+            # More generic patterns that might catch Instagram-style buttons
+            'div[tabindex="0"]:contains("Follow")', 'div[tabindex="0"]:contains("follow")',
+            'span:contains("Follow")', 'span:contains("follow")', 'span:contains("Following")',
+            # Try to catch any text-based follow elements
+            '*:contains("Follow")', '*:contains("follow")', '*:contains("Following")'
+        ],
+        'profile_links': ['[href*="/profile"]', '[href*="/user"]', '[href*="/@"]'],
+        'hashtags': ['[href*="#"]', 'a[href*="/tag/"]', 'a[href*="/hashtag/"]'],
+        
+        # Form Elements
+        'checkboxes': ['input[type="checkbox"]'],
+        'radio_buttons': ['input[type="radio"]'],
+        'file_uploads': ['input[type="file"]'],
+        'sliders': ['input[type="range"]', '[role="slider"]'],
+        
+        # Media Elements
+        'iframes': ['iframe'],
+        'embeds': ['embed', 'object'],
+        'canvas': ['canvas'],
+        'svg': ['svg'],
+        
+        # Data Elements
+        'timestamps': ['time', '[datetime]'],
+        'prices': ['[class*="price"]', '[data-price]'],
+        'ratings': ['[class*="rating"]', '[class*="star"]'],
+        'badges': ['[class*="badge"]', '[class*="label"]'],
+        
+        # Interactive Widgets
+        'carousels': ['[class*="carousel"]', '[class*="slider"]', '[role="region"][aria-live]'],
+        'calendars': ['[role="grid"][aria-label*="calendar" i]', '.calendar'],
+        'maps': ['[class*="map"]', 'iframe[src*="maps"]'],
+        'charts': ['canvas[class*="chart"]', 'svg[class*="chart"]']
+    }
+    
+    # Find elements and generate xpath queries
+    for element_name, selectors in element_categories.items():
+        xpath_list = []
+        
+        for selector in selectors:
+            found_elements = []
+            
+            try:
+                # Handle different selector types
+                if selector.startswith('[') and ']' in selector:
+                    # Complex attribute selector
+                    if '=' in selector:
+                        attr_part = selector[1:-1]
+                        if '*=' in attr_part:
+                            attr_name, attr_value = attr_part.split('*=', 1)
+                            attr_value = attr_value.strip('"\'')
+                            # Handle case-insensitive search
+                            if attr_value.endswith(' i'):
+                                attr_value = attr_value[:-2]
+                                found_elements = soup.find_all(attrs={attr_name: lambda x: x and attr_value.lower() in x.lower()})
+                            else:
+                                found_elements = soup.find_all(attrs={attr_name: lambda x: x and attr_value in x})
+                        elif '=' in attr_part:
+                            attr_name, attr_value = attr_part.split('=', 1)
+                            attr_value = attr_value.strip('"\'')
+                            found_elements = soup.find_all(attrs={attr_name: attr_value})
+                    else:
+                        # Just attribute presence
+                        attr_name = selector[1:-1]
+                        found_elements = soup.find_all(attrs={attr_name: True})
+                elif selector.startswith('.'):
+                    # Class selector
+                    class_name = selector[1:]
+                    found_elements = soup.find_all(class_=lambda x: x and class_name in x if x else False)
+                elif selector.startswith('#'):
+                    # ID selector
+                    id_name = selector[1:]
+                    found_elements = soup.find_all(id=id_name)
+                elif ':contains(' in selector:
+                    # Handle :contains() pseudo-selector
+                    parts = selector.split(':contains(')
+                    if len(parts) == 2:
+                        tag_part = parts[0]
+                        text_part = parts[1].rstrip(')')
+                        text_to_find = text_part.strip('"\'')
+                        
+                        # Find elements by tag and text content
+                        if tag_part == '*':
+                            # Wildcard selector - search all elements
+                            found_elements = soup.find_all(string=lambda text: text and text_to_find.lower() in text.lower())
+                            # Get the parent elements that contain this text
+                            found_elements = [text.parent for text in found_elements if text.parent and text.parent.name]
+                        elif '[' in tag_part and ']' in tag_part:
+                            # Handle tag with attributes like 'div[role="button"]'
+                            base_tag = tag_part.split('[')[0]
+                            attr_part = tag_part[tag_part.find('[')+1:tag_part.find(']')]
+                            if '=' in attr_part:
+                                attr_name, attr_value = attr_part.split('=', 1)
+                                attr_value = attr_value.strip('"\'')
+                                found_elements = soup.find_all(base_tag, attrs={attr_name: attr_value})
+                                # Filter by text content
+                                found_elements = [el for el in found_elements if text_to_find.lower() in el.get_text().lower()]
+                            else:
+                                found_elements = soup.find_all(base_tag, attrs={attr_part: True})
+                                found_elements = [el for el in found_elements if text_to_find.lower() in el.get_text().lower()]
+                        else:
+                            # Simple tag selector with text
+                            found_elements = soup.find_all(tag_part)
+                            found_elements = [el for el in found_elements if text_to_find.lower() in el.get_text().lower()]
+                else:
+                    # Tag selector (or complex selector)
+                    if '[' in selector and ']' in selector:
+                        # Handle complex tag selectors like 'button[aria-label*="like" i]'
+                        base_tag = selector.split('[')[0]
+                        attr_part = selector[selector.find('[')+1:selector.find(']')]
+                        
+                        if '*=' in attr_part:
+                            attr_name, attr_value = attr_part.split('*=', 1)
+                            attr_value = attr_value.strip('"\'')
+                            # Check for case-insensitive flag
+                            case_insensitive = attr_part.endswith(' i')
+                            if case_insensitive:
+                                attr_value = attr_value.replace(' i', '')
+                                found_elements = soup.find_all(base_tag, attrs={attr_name: lambda x: x and attr_value.lower() in x.lower()})
+                            else:
+                                found_elements = soup.find_all(base_tag, attrs={attr_name: lambda x: x and attr_value in x})
+                        elif '=' in attr_part:
+                            attr_name, attr_value = attr_part.split('=', 1)
+                            attr_value = attr_value.strip('"\'')
+                            found_elements = soup.find_all(base_tag, attrs={attr_name: attr_value})
+                        else:
+                            # Just attribute presence
+                            found_elements = soup.find_all(base_tag, attrs={attr_part: True})
+                    else:
+                        # Simple tag selector
+                        found_elements = soup.find_all(selector)
+                
+                # Generate xpath for found elements (limit to avoid too many results)
+                for element in found_elements[:5]:  # Limit to 5 elements per selector
+                    xpaths = generate_xpath_for_element(element, soup)
+                    for xpath in xpaths:
+                        if xpath and xpath not in xpath_list:
+                            xpath_list.append(xpath)
+                        
+            except Exception as e:
+                logger.debug(f"Error processing selector '{selector}': {e}")
+                continue
+        
+        if xpath_list:
+            elements_map[element_name] = xpath_list
+            logger.info(f"Found {len(xpath_list)} {element_name} elements")
+    
+    logger.info(f"Total element types found: {len(elements_map)}")
+    return elements_map
 
 def analyze_single_page_with_openai(html_content: str, url: str) -> str:
     # This function remains as is for the original feature
@@ -570,11 +950,118 @@ def list_all_jobs():
     return jsonify({"total_jobs": len(jobs_list), "jobs": jobs_list})
 
 
+# --- NEW: HTML Analysis Route ---
+@app.route('/api/analyze-html', methods=['POST'])
+@require_api_key
+def analyze_html():
+    """
+    Analyze provided HTML content and return element xpath mappings.
+    
+    Expected JSON payload:
+    {
+        "html_content": "<html>...</html>"
+    }
+    """
+    if not request.is_json:
+        return jsonify({"error": "Bad Request", "message": "Request body must be JSON"}), 400
+    
+    data = request.get_json()
+    html_content = data.get('html_content')
+    
+    if not html_content:
+        return jsonify({"error": "Bad Request", "message": "'html_content' is required"}), 400
+    
+    if not isinstance(html_content, str):
+        return jsonify({"error": "Bad Request", "message": "'html_content' must be a string"}), 400
+    
+    if len(html_content.strip()) < 10:
+        return jsonify({"error": "Bad Request", "message": "HTML content appears to be too short or empty"}), 400
+    
+    try:
+        logger.info("Starting HTML analysis")
+        logger.info(f"HTML content length: {len(html_content)} characters")
+        
+        elements_map = extract_all_elements(html_content)
+        
+        logger.info("Successfully analyzed HTML content")
+        return jsonify({
+            "status": "success",
+            "elements": elements_map,
+            "total_elements": len(elements_map),
+            "html_length": len(html_content),
+            "debug_info": f"Analyzed {len(html_content)} characters of HTML content"
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Unexpected error analyzing HTML content: {e}", exc_info=True)
+        return jsonify({"error": "Internal Server Error", "message": "An unexpected error occurred during HTML analysis"}), 500
+
+
+@app.route('/api/analyze-html-file', methods=['POST'])
+@require_api_key
+def analyze_html_file():
+    """
+    Analyze HTML content from uploaded file and return element xpath mappings.
+    
+    Expected: HTML file upload using multipart/form-data
+    """
+    api_key = request.headers.get('api-key')
+    if not api_key or api_key != EXPECTED_SERVICE_API_KEY:
+        return jsonify({"error": "Unauthorized", "message": "Invalid or missing API key"}), 401
+    
+    if 'html_file' not in request.files:
+        return jsonify({"error": "Bad Request", "message": "No 'html_file' uploaded"}), 400
+    
+    file = request.files['html_file']
+    if file.filename == '':
+        return jsonify({"error": "Bad Request", "message": "No file selected"}), 400
+    
+    try:
+        # Read file content
+        html_content = file.read().decode('utf-8')
+        
+        if len(html_content.strip()) < 10:
+            return jsonify({"error": "Bad Request", "message": "HTML file appears to be too short or empty"}), 400
+        
+        logger.info(f"Starting HTML file analysis: {file.filename}")
+        logger.info(f"HTML content length: {len(html_content)} characters")
+        
+        elements_map = extract_all_elements(html_content)
+        
+        logger.info(f"Successfully analyzed HTML file: {file.filename}")
+        return jsonify({
+            "status": "success",
+            "filename": file.filename,
+            "elements": elements_map,
+            "total_elements": len(elements_map),
+            "html_length": len(html_content),
+            "debug_info": f"Analyzed {len(html_content)} characters from file '{file.filename}'"
+        }), 200
+        
+    except UnicodeDecodeError:
+        return jsonify({"error": "Bad Request", "message": "File must be valid UTF-8 encoded HTML"}), 400
+    except Exception as e:
+        logger.error(f"Unexpected error analyzing HTML file: {e}", exc_info=True)
+        return jsonify({"error": "Internal Server Error", "message": "An unexpected error occurred during HTML file analysis"}), 500
+
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     health_status = {"status": "ok", "message": "API is running"}
     # ... (health check logic remains the same) ...
     return jsonify(health_status), 200
+
+@app.route('/api/routes', methods=['GET'])
+def list_routes():
+    """List all available routes for debugging."""
+    routes = []
+    for rule in app.url_map.iter_rules():
+        routes.append({
+            "endpoint": rule.endpoint,
+            "methods": list(rule.methods),
+            "url": str(rule)
+        })
+    return jsonify({"routes": routes}), 200
 
 # --- Global Error Handlers ---
 @app.errorhandler(404)
